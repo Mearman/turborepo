@@ -5,10 +5,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15]
-        ref: [fix-branch]
-    name: ${{ matrix.runner }} zig 0.16 crash report
-    runs-on: ${{ matrix.runner }}
+        variant: [as-is, no-bundled-compiler-rt]
+    name: macos-15 ${{ matrix.variant }}
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -23,13 +22,25 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 12.0.0
-      - name: Toolchain from rust-toolchain.toml
-        shell: bash
+      - name: Toolchain
         run: |
           rustup show active-toolchain || rustup toolchain install
           rustc -V
           zig version
-      - name: Ghostty-facing tests
+      - name: Patched Ghostty checkout
+        if: matrix.variant == 'no-bundled-compiler-rt'
         run: |
-          RUST_BACKTRACE=1 cargo nextest run -p turbo --test tui_test --no-fail-fast -E 'test(renders_tasks_and_navigates_between_their_output)' --no-capture || true
-          for f in "$TMPDIR"/report-*.toml; do echo "== $f"; cat "$f"; done
+          git clone --quiet https://github.com/ghostty-org/ghostty.git "$RUNNER_TEMP/ghostty"
+          git -C "$RUNNER_TEMP/ghostty" checkout --quiet f2a7652abab5d03f846f3150f9cc1b2dc23bb3dd
+          perl -pi -e 's/lib\.bundle_compiler_rt = true;/lib.bundle_compiler_rt = false;/; s/lib\.bundle_ubsan_rt = true;/lib.bundle_ubsan_rt = false;/' "$RUNNER_TEMP/ghostty/src/build/GhosttyLibVt.zig"
+          git -C "$RUNNER_TEMP/ghostty" diff --stat
+          echo "GHOSTTY_SOURCE_DIR=$RUNNER_TEMP/ghostty" >> "$GITHUB_ENV"
+      - name: Exported libc symbols in the static library
+        run: |
+          cargo build -p libghostty-vt-sys
+          for f in target/debug/build/libghostty-vt-sys-*/out/ghostty-install/lib/libghostty-vt.a; do
+            echo "== $f"
+            nm -gU "$f" | grep -E " T _(memset|memcpy|memmove|memcmp|bcmp)$" || echo "none exported"
+          done
+      - name: tui_test
+        run: cargo nextest run -p turbo --test tui_test --no-fail-fast
