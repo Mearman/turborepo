@@ -6,14 +6,12 @@ jobs:
       fail-fast: false
       matrix:
         runner: [macos-15]
-        ref: [main]
-    name: ${{ matrix.runner }} baseline ${{ matrix.ref }}
+        ref: [fix-branch]
+    name: ${{ matrix.runner }} zig 0.16 crash report
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ matrix.ref }}
       - uses: ./.github/actions/setup-zig
       - uses: ./.github/actions/setup-capnproto
       - uses: arduino/setup-protoc@v3
@@ -33,5 +31,5 @@ jobs:
           zig version
       - name: Ghostty-facing tests
         run: |
-          cargo nextest run -p turborepo-ghostty --no-fail-fast
-          cargo nextest run -p turbo --test tui_test --no-fail-fast
+          RUST_BACKTRACE=1 cargo nextest run -p turbo --test tui_test --no-fail-fast -E 'test(renders_tasks_and_navigates_between_their_output)' --no-capture || true
+          for f in "$TMPDIR"/report-*.toml; do echo "== $f"; cat "$f"; done
