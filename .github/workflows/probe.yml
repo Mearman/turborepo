@@ -21,15 +21,8 @@ jobs:
           sw_vers -productVersion
       - name: Consumer source
         run: |
-          cat > "$RUNNER_TEMP/consumer.c" <<'EOF'
-          # include <string.h> include <stdio.h>
-          int main(void) {
-            char buf[64];
-            memset(buf, 0xAB, sizeof buf);
-            printf("%d\n", buf[0] == (char)0xAB);
-            return 0;
-          }
-          EOF
+          printf 'int printf(const char *, ...);\nvoid *memset(void *, int, unsigned long);\nint main(void) { char b[64]; memset(b, 0xAB, 64); printf("%d\\n", b[0] == (char)0xAB); return 0; }\n' > "$RUNNER_TEMP/consumer.c"
+          cat "$RUNNER_TEMP/consumer.c"
       - name: Build and inspect, script as shipped
         run: |
           cd "$RUNNER_TEMP/ghostty"
