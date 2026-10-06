@@ -6,33 +6,70 @@ jobs:
       fail-fast: false
       matrix:
         runner: [macos-15, macos-26]
-    name: ${{ matrix.runner }} fixed build.rs
+    name: ${{ matrix.runner }} ghostty main
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-zig
-      - uses: ./.github/actions/setup-capnproto
-      - uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 12.0.0
-      - name: Toolchain
+      - name: Zig 0.16.0
         run: |
-          rustup show active-toolchain || rustup toolchain install
-          rustc -V
-          zig version
-      - name: Exported libc symbols in the static library
+          curl -fsSL https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz | tar -xJ
+          echo "$PWD/zig-aarch64-macos-0.16.0" >> "$GITHUB_PATH"
+      - name: Ghostty main
         run: |
-          cargo build -p libghostty-vt-sys
-          for f in target/debug/build/libghostty-vt-sys-*/out/ghostty-install/lib/libghostty-vt.a; do
-            echo "== $f"
-            nm -gUA "$f" | grep -E " T _(memset|memcpy|memmove|memcmp|bcmp)$" || echo "none exported"
+          git clone --quiet https://github.com/ghostty-org/ghostty.git "$RUNNER_TEMP/ghostty"
+          git -C "$RUNNER_TEMP/ghostty" log -1 --format='ghostty %H'
+          sw_vers -productVersion
+      - name: Consumer source
+        run: |
+          cat > "$RUNNER_TEMP/consumer.c" <<'EOF'
+          # include <string.h> include <stdio.h>
+          int main(void) {
+            char buf[64];
+            memset(buf, 0xAB, sizeof buf);
+            printf("%d\n", buf[0] == (char)0xAB);
+            return 0;
+          }
+          EOF
+      - name: Build and inspect, script as shipped
+        run: |
+          cd "$RUNNER_TEMP/ghostty"
+          zig build -Demit-lib-vt=true -Dcpu=baseline
+          A=$(find zig-out -name 'libghostty-vt*.a' | head -1)
+          echo "archive: $A"
+          echo "--- global libc symbols defined by any member"
+          nm -gUA "$A" | grep -E " T _(memset|memcpy|memmove|memcmp|bcmp|strlen)$" || echo "none"
+          clang -fno-builtin "$RUNNER_TEMP/consumer.c" -Wl,-force_load,"$A" -o "$RUNNER_TEMP/consumer-asis"
+          echo "--- memset binding in the consumer"
+          nm -m "$RUNNER_TEMP/consumer-asis" | grep -E "_memset$" || true
+      - name: Rebuild with the script localising every member
+        run: |
+          cd "$RUNNER_TEMP/ghostty"
+          python3 - src/build/libsystem_override.sh <<'PY'
+          import sys
+          p = sys.argv[1]
+          s = open(p).read()
+          i = s.index('xcrun ar x "$out" compiler_rt.o')
+          s = s[:i] + """xcrun ar x "$out"
+          sort -u localize.txt >loc.txt
+          for member in *.o; do
+            chmod 644 "$member"
+            xcrun nm -g "$member" | awk '$2 ~ /^[A-TV-Z]$/ {print $3}' | sort -u >all.txt
+            if comm -12 all.txt loc.txt | grep -q .; then
+              comm -23 all.txt loc.txt >keep.txt
+              xcrun nmedit -s keep.txt "$member"
+            fi
           done
-      - name: tui_test
-        run: cargo nextest run -p turbo --test tui_test --no-fail-fast
+          xcrun ar r "$out" *.o
+          xcrun ranlib "$out" 2>/dev/null || true
+          """
+          open(p, 'w').write(s)
+          PY
+          rm -rf zig-out .zig-cache
+          zig build -Demit-lib-vt=true -Dcpu=baseline
+          A=$(find zig-out -name 'libghostty-vt*.a' | head -1)
+          echo "--- global libc symbols defined by any member"
+          nm -gUA "$A" | grep -E " T _(memset|memcpy|memmove|memcmp|bcmp|strlen)$" || echo "none"
+          clang -fno-builtin "$RUNNER_TEMP/consumer.c" -Wl,-force_load,"$A" -o "$RUNNER_TEMP/consumer-fixed"
+          echo "--- memset binding in the consumer"
+          nm -m "$RUNNER_TEMP/consumer-fixed" | grep -E "_memset$" || true
+          "$RUNNER_TEMP/consumer-fixed"
