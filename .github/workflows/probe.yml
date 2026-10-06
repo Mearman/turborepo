@@ -5,9 +5,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [as-is, localize-all-members]
-    name: macos-15 ${{ matrix.variant }}
-    runs-on: macos-15
+        runner: [macos-15, macos-26]
+    name: ${{ matrix.runner }} fixed build.rs
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -27,33 +27,6 @@ jobs:
           rustup show active-toolchain || rustup toolchain install
           rustc -V
           zig version
-      - name: Patched Ghostty checkout
-        if: matrix.variant == 'localize-all-members'
-        run: |
-          git clone --quiet https://github.com/ghostty-org/ghostty.git "$RUNNER_TEMP/ghostty"
-          git -C "$RUNNER_TEMP/ghostty" checkout --quiet f2a7652abab5d03f846f3150f9cc1b2dc23bb3dd
-          python3 - "$RUNNER_TEMP/ghostty/src/build/libsystem_override.sh" <<'PY'
-          import sys
-          p = sys.argv[1]
-          s = open(p).read()
-          i = s.index('xcrun ar x "$out" compiler_rt.o')
-          s = s[:i] + """xcrun ar x "$out"
-          sort -u localize.txt >loc.txt
-          for o in *.o; do
-            chmod 644 "$o"
-            xcrun nm -g "$o" | awk '$2 ~ /^[A-TV-Z]$/ {print $3}' | sort -u >all.txt
-            if comm -12 all.txt loc.txt | grep -q .; then
-              comm -23 all.txt loc.txt >keep.txt
-              xcrun nmedit -s keep.txt "$o"
-            fi
-          done
-          xcrun ar r "$out" *.o
-          xcrun ranlib "$out" 2>/dev/null || true
-          """
-          open(p, 'w').write(s)
-          PY
-          git -C "$RUNNER_TEMP/ghostty" diff --stat
-          echo "GHOSTTY_SOURCE_DIR=$RUNNER_TEMP/ghostty" >> "$GITHUB_ENV"
       - name: Exported libc symbols in the static library
         run: |
           cargo build -p libghostty-vt-sys
