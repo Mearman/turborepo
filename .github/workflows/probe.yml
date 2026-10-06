@@ -6,13 +6,28 @@ jobs:
       fail-fast: false
       matrix:
         runner: [macos-15, macos-26]
+        ghostty:
+          - name: zig-0.16-bump
+            zig: 0.16.0
+            sha: e8525c0fd907a6bfa91286984c767894b2b8fa65
+          - name: after-bump-touchups
+            zig: 0.16.0
+            sha: f2a7652abab5d03f846f3150f9cc1b2dc23bb3dd
+          - name: main
+            zig: 0.16.0
+            sha: 406f2e54401978ad0bbf312b465554465b901f4e
+    name: ${{ matrix.runner }} ghostty ${{ matrix.ghostty.name }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - name: Zig 0.15.2
+      - name: Zig ${{ matrix.ghostty.zig }}
         run: |
-          curl -fsSL https://ziglang.org/download/0.15.2/zig-aarch64-macos-0.15.2.tar.xz | tar -xJ
-          echo "$PWD/zig-aarch64-macos-0.15.2" >> "$GITHUB_PATH"
+          curl -fsSL https://ziglang.org/download/${{ matrix.ghostty.zig }}/zig-aarch64-macos-${{ matrix.ghostty.zig }}.tar.xz | tar -xJ
+          echo "$PWD/zig-aarch64-macos-${{ matrix.ghostty.zig }}" >> "$GITHUB_PATH"
+      - name: Pin ghostty ${{ matrix.ghostty.sha }}
+        run: |
+          sed -i '' 's/^const GHOSTTY_COMMIT: &str = ".*";/const GHOSTTY_COMMIT: \&str = "${{ matrix.ghostty.sha }}";/' crates/libghostty-vt-sys/build.rs
+          grep -n '^const GHOSTTY_COMMIT' crates/libghostty-vt-sys/build.rs
       - name: Toolchain from rust-toolchain.toml
         run: |
           rustup show active-toolchain || rustup toolchain install
@@ -20,3 +35,5 @@ jobs:
           zig version
       - name: Build libghostty-vt-sys
         run: cargo build -p libghostty-vt-sys
+      - name: Build and test the Rust bindings user
+        run: cargo test -p turborepo-ghostty
