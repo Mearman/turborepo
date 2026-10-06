@@ -18,6 +18,7 @@ jobs:
           printf 'const std = @import("std");\npub fn build(b: *std.Build) void {\n  const exe = b.addExecutable(.{ .name = "x", .root_module = b.createModule(.{ .root_source_file = b.path("a.zig"), .target = b.standardTargetOptions(.{}), .optimize = .Debug, .link_libc = true }) });\n  b.installArtifact(exe);\n}\n' > build.zig
           zig build && echo ZIG_BUILD_OK
       - name: Pinned nightly links a build script
+        if: always()
         run: |
           rustup toolchain install nightly-2026-07-03 --profile minimal
           cargo +nightly-2026-07-03 new --quiet p && cd p && printf 'fn main(){}\n' > build.rs && cargo +nightly-2026-07-03 build && echo RUST_BUILD_OK
