@@ -30,7 +30,8 @@ jobs:
               for (unsigned long n = 0; n < 300; n++)
                 for (int v = 0; v < 256; v += 51) {
                   for (int i = 0; i < 600; i++) buf[i] = 0x11;
-                  memset((void *)(buf + off), v, n);
+                  void *ret = memset((void *)(buf + off), v, n);
+          if (ret != (void *)(buf + off)) { puts("memset RETURNED THE WRONG POINTER"); return 2; }
                   for (unsigned long i = 0; i < 600; i++) {
                     unsigned char want = (i >= off && i < off + n) ? (unsigned char)v : 0x11;
                     if (buf[i] != want) { puts("memset WRONG"); return 1; }
