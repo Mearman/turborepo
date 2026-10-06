@@ -6,25 +6,28 @@ jobs:
       fail-fast: false
       matrix:
         runner: [ubuntu-latest, windows-latest, macos-15, macos-26]
-    name: ${{ matrix.runner }} zig 0.16 ghostty f2a7652
+    name: ${{ matrix.runner }} lint and test
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-zig
+      - uses: ./.github/actions/setup-capnproto
+      - uses: arduino/setup-protoc@v3
         with:
-          version: 0.16.0
-      - name: Pin ghostty
-        shell: bash
-        run: |
-          perl -pi -e 's/^const GHOSTTY_COMMIT: &str = ".*";/const GHOSTTY_COMMIT: &str = "f2a7652abab5d03f846f3150f9cc1b2dc23bb3dd";/' crates/libghostty-vt-sys/build.rs
-          grep -n '^const GHOSTTY_COMMIT' crates/libghostty-vt-sys/build.rs
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.0.0
       - name: Toolchain from rust-toolchain.toml
         shell: bash
         run: |
           rustup show active-toolchain || rustup toolchain install
           rustc -V
           zig version
-      - name: Build libghostty-vt-sys
-        run: cargo build -p libghostty-vt-sys
-      - name: Test the Rust bindings user
-        run: cargo test -p turborepo-ghostty
+      - name: cargo lint
+        run: cargo lint
+      - name: cargo nextest (turbo.json command)
+        run: cargo nextest run --workspace --exclude turborepo-lsp --exclude turborepo-schema-gen --exclude turborepo-napi --no-fail-fast
