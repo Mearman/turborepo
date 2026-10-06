@@ -29,6 +29,10 @@ pub(super) enum MaintenanceStatus {
     MalformedMarkers,
     ConcurrentEdit,
     Locked,
+    /// `AGENTS.md` is a symlink whose target is outside the repository root.
+    OutsideRepository,
+    /// `AGENTS.md` is a symlink whose target does not exist.
+    DanglingSymlink,
 }
 
 /// Update the managed guidance only when an agent is detected and the root
@@ -88,7 +92,10 @@ fn upsert(repo_root: &Path) -> io::Result<MaintenanceStatus> {
         }
     }
 
-    let agents_path = repo_root.join("AGENTS.md");
+    let agents_path = match resolve_agents_path(repo_root)? {
+        AgentsFile::Path(path) => path,
+        AgentsFile::Skip(status) => return Ok(status),
+    };
     let original = match fs::read_to_string(&agents_path) {
         Ok(contents) => Some(contents),
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
@@ -101,10 +108,7 @@ fn upsert(repo_root: &Path) -> io::Result<MaintenanceStatus> {
         Err(()) => return Ok(MaintenanceStatus::MalformedMarkers),
     };
 
-    let Some(parent) = agents_path.parent() else {
-        return Err(io::Error::other("AGENTS.md has no parent directory"));
-    };
-    let temp_path = write_temp_file(parent, &updated, original.as_deref())?;
+    let temp_path = write_temp_file(&agents_path, &updated, original.as_deref())?;
 
     // Do not replace the file if another editor changed it after we read it.
     // All turbo invocations additionally share the pid lock above.
@@ -119,6 +123,42 @@ fn upsert(repo_root: &Path) -> io::Result<MaintenanceStatus> {
             Err(error)
         }
     }
+}
+
+enum AgentsFile {
+    /// The file to read and atomically replace.
+    Path(PathBuf),
+    /// The file must not be touched; report this status instead.
+    Skip(MaintenanceStatus),
+}
+
+/// Finds the file to update. A regular or missing `AGENTS.md` is used as is. A
+/// symlink is resolved to its final target so that the atomic replace lands on
+/// the target and leaves the link in place, but only when that target is inside
+/// the repository: a link out of the repository, or one with no target, is
+/// never written through.
+fn resolve_agents_path(repo_root: &Path) -> io::Result<AgentsFile> {
+    let agents_path = repo_root.join("AGENTS.md");
+    match fs::symlink_metadata(&agents_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {}
+        Ok(_) => return Ok(AgentsFile::Path(agents_path)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(AgentsFile::Path(agents_path));
+        }
+        Err(error) => return Err(error),
+    }
+
+    let target = match fs::canonicalize(&agents_path) {
+        Ok(target) => target,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(AgentsFile::Skip(MaintenanceStatus::DanglingSymlink));
+        }
+        Err(error) => return Err(error),
+    };
+    if !target.starts_with(fs::canonicalize(repo_root)?) {
+        return Ok(AgentsFile::Skip(MaintenanceStatus::OutsideRepository));
+    }
+    Ok(AgentsFile::Path(target))
 }
 
 fn replace_if_unchanged(
@@ -170,9 +210,19 @@ fn upsert_managed_block(existing: Option<&str>) -> Result<Option<String>, ()> {
     Ok(Some(format!("{existing}{separator}{MANAGED_BLOCK}\n")))
 }
 
-fn write_temp_file(parent: &Path, contents: &str, original: Option<&str>) -> io::Result<PathBuf> {
+/// Writes `contents` to a temporary file beside `agents_path`, so the later
+/// rename stays on one filesystem, with the permissions of `agents_path` when
+/// it already exists.
+fn write_temp_file(
+    agents_path: &Path,
+    contents: &str,
+    original: Option<&str>,
+) -> io::Result<PathBuf> {
+    let Some(parent) = agents_path.parent() else {
+        return Err(io::Error::other("AGENTS.md has no parent directory"));
+    };
     let permissions = original
-        .and_then(|_| fs::metadata(parent.join("AGENTS.md")).ok())
+        .and_then(|_| fs::metadata(agents_path).ok())
         .map(|metadata| metadata.permissions());
 
     loop {
@@ -429,6 +479,109 @@ mod tests {
 
         assert!(upsert(temp.path()).is_err());
         assert!(agents.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_through_a_symlinked_file_and_keeps_the_symlink() {
+        let temp = TempDir::new().unwrap();
+        let readme = temp.path().join("README.md");
+        let agents = temp.path().join("AGENTS.md");
+        fs::write(&readme, "# Readme\n").unwrap();
+        std::os::unix::fs::symlink("README.md", &agents).unwrap();
+
+        assert_eq!(upsert(temp.path()).unwrap(), MaintenanceStatus::Updated);
+        assert!(fs::symlink_metadata(&agents).unwrap().is_symlink());
+        assert_eq!(
+            fs::read_link(&agents).unwrap(),
+            Path::new("README.md").to_owned()
+        );
+        let updated = fs::read_to_string(&readme).unwrap();
+        assert!(updated.starts_with("# Readme\n"));
+        assert!(updated.contains(MANAGED_BLOCK));
+        assert_eq!(fs::read_to_string(&agents).unwrap(), updated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_through_a_symlink_chain_and_preserves_target_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let docs = temp.path().join("docs");
+        fs::create_dir(&docs).unwrap();
+        let target = docs.join("RULES.md");
+        fs::write(&target, "# Rules\n").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        std::os::unix::fs::symlink("docs/RULES.md", temp.path().join("middle.md")).unwrap();
+        let agents = temp.path().join("AGENTS.md");
+        std::os::unix::fs::symlink("middle.md", &agents).unwrap();
+
+        assert_eq!(upsert(temp.path()).unwrap(), MaintenanceStatus::Updated);
+        assert!(fs::symlink_metadata(&agents).unwrap().is_symlink());
+        assert!(
+            fs::symlink_metadata(temp.path().join("middle.md"))
+                .unwrap()
+                .is_symlink()
+        );
+        assert!(fs::read_to_string(&target).unwrap().contains(MANAGED_BLOCK));
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        for dir in [&docs, temp.path()] {
+            let temporary = fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .filter(|name| name.to_string_lossy().ends_with(".tmp"))
+                .collect::<Vec<_>>();
+            assert!(temporary.is_empty(), "left temporary files: {temporary:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn leaves_a_symlink_pointing_outside_the_repository_alone() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("repo");
+        let outside = temp.path().join("outside");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let target = outside.join("shared.md");
+        fs::write(&target, "# Shared\n").unwrap();
+        let agents = root.join("AGENTS.md");
+        std::os::unix::fs::symlink(&target, &agents).unwrap();
+
+        assert_eq!(upsert(&root).unwrap(), MaintenanceStatus::OutsideRepository);
+        assert!(fs::symlink_metadata(&agents).unwrap().is_symlink());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "# Shared\n");
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn leaves_a_dangling_symlink_alone() {
+        let temp = TempDir::new().unwrap();
+        let agents = temp.path().join("AGENTS.md");
+        std::os::unix::fs::symlink("missing.md", &agents).unwrap();
+
+        assert_eq!(
+            upsert(temp.path()).unwrap(),
+            MaintenanceStatus::DanglingSymlink
+        );
+        assert!(fs::symlink_metadata(&agents).unwrap().is_symlink());
+        assert!(!temp.path().join("missing.md").exists());
+    }
+
+    #[test]
+    fn regular_file_is_still_replaced_in_place_with_its_permissions() {
+        let temp = TempDir::new().unwrap();
+        let agents = temp.path().join("AGENTS.md");
+        fs::write(&agents, "# Mine\n").unwrap();
+
+        assert_eq!(upsert(temp.path()).unwrap(), MaintenanceStatus::Updated);
+        assert!(fs::symlink_metadata(&agents).unwrap().is_file());
+        assert!(fs::read_to_string(&agents).unwrap().starts_with("# Mine\n"));
     }
 
     #[test]

@@ -254,6 +254,14 @@ fn maintain_agent_guidance(repo_root: &AbsoluteSystemPath, args: &Args, has_repo
         Ok(agent_guidance::MaintenanceStatus::Locked) => {
             warn!("Skipped AGENTS.md update because another turbo invocation is updating it");
         }
+        Ok(agent_guidance::MaintenanceStatus::OutsideRepository) => {
+            warn!(
+                "Skipped AGENTS.md update because it is a symlink to a file outside the repository"
+            );
+        }
+        Ok(agent_guidance::MaintenanceStatus::DanglingSymlink) => {
+            warn!("Skipped AGENTS.md update because it is a symlink to a file that does not exist");
+        }
         Err(error) => {
             warn!(
                 "Could not update AGENTS.md: {error}; continuing without changing the command \
