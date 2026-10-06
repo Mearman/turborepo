@@ -5,12 +5,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, macos-26]
-    name: ${{ matrix.runner }} lint and test
+        runner: [macos-15]
+        ref: [main]
+    name: ${{ matrix.runner }} baseline ${{ matrix.ref }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
       - uses: ./.github/actions/setup-zig
       - uses: ./.github/actions/setup-capnproto
       - uses: arduino/setup-protoc@v3
