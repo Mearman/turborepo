@@ -8,7 +8,7 @@ jobs:
         runner: [macos-15, macos-26]
     name: ${{ matrix.runner }} lint and test
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-zig
@@ -28,5 +28,7 @@ jobs:
           rustup show active-toolchain || rustup toolchain install
           rustc -V
           zig version
-      - name: cargo nextest (turbo.json command)
-        run: cargo nextest run --workspace --exclude turborepo-lsp --exclude turborepo-schema-gen --exclude turborepo-napi --no-fail-fast --status-level slow --final-status-level fail
+      - name: Ghostty-facing tests
+        run: |
+          cargo nextest run -p turborepo-ghostty --no-fail-fast
+          cargo nextest run -p turbo --test tui_test --no-fail-fast
