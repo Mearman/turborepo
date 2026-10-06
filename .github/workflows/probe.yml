@@ -21,7 +21,25 @@ jobs:
           sw_vers -productVersion
       - name: Consumer source
         run: |
-          printf 'int printf(const char *, ...);\nvoid *memset(void *, int, unsigned long);\nint main(void) { volatile unsigned char b[64]; int ok = 1; memset((void *)b, 0xAB, 64); for (int i = 0; i < 64; i++) if (b[i] != 0xAB) ok = 0; printf("memset ok: %d\\n", ok); return !ok; }\n' > "$RUNNER_TEMP/consumer.c"
+          cat > "$RUNNER_TEMP/consumer.c" <<'CEOF'
+          int puts(const char *);
+          void *memset(void *, int, unsigned long);
+          static volatile unsigned char buf[600];
+          int main(void) {
+            for (unsigned long off = 0; off < 40; off++)
+              for (unsigned long n = 0; n < 300; n++)
+                for (int v = 0; v < 256; v += 51) {
+                  for (int i = 0; i < 600; i++) buf[i] = 0x11;
+                  memset((void *)(buf + off), v, n);
+                  for (unsigned long i = 0; i < 600; i++) {
+                    unsigned char want = (i >= off && i < off + n) ? (unsigned char)v : 0x11;
+                    if (buf[i] != want) { puts("memset WRONG"); return 1; }
+                  }
+                }
+            puts("memset correct");
+            return 0;
+          }
+          CEOF
           clang -fno-builtin "$RUNNER_TEMP/consumer.c" -o "$RUNNER_TEMP/consumer-control"
           echo "control (no Ghostty library):"; "$RUNNER_TEMP/consumer-control"
           cat "$RUNNER_TEMP/consumer.c"
