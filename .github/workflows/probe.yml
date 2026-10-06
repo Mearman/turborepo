@@ -24,19 +24,22 @@ jobs:
           cat > "$RUNNER_TEMP/consumer.c" <<'CEOF'
           int puts(const char *);
           void *memset(void *, int, unsigned long);
-          static volatile unsigned char buf[600];
+          static volatile unsigned char buf[400000];
+          static unsigned long sizes[] = {0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 512, 513, 1023, 1024, 1025, 4095, 4096, 4097, 8191, 8192, 8193, 65535, 65536, 65537, 100003, 262144, 300001};
           int main(void) {
-            for (unsigned long off = 0; off < 40; off++)
-              for (unsigned long n = 0; n < 300; n++)
-                for (int v = 0; v < 256; v += 51) {
-                  for (int i = 0; i < 600; i++) buf[i] = 0x11;
+            for (unsigned long off = 0; off < 70; off += 1)
+              for (unsigned long k = 0; k < sizeof sizes / sizeof sizes[0]; k++) {
+                unsigned long n = sizes[k];
+                for (int v = 0; v < 256; v += 85) {
+                  for (unsigned long i = 0; i < off + n + 70; i++) buf[i] = 0x11;
                   void *ret = memset((void *)(buf + off), v, n);
-          if (ret != (void *)(buf + off)) { puts("memset RETURNED THE WRONG POINTER"); return 2; }
-                  for (unsigned long i = 0; i < 600; i++) {
+                  if (ret != (void *)(buf + off)) { puts("memset RETURNED THE WRONG POINTER"); return 2; }
+                  for (unsigned long i = 0; i < off + n + 70; i++) {
                     unsigned char want = (i >= off && i < off + n) ? (unsigned char)v : 0x11;
                     if (buf[i] != want) { puts("memset WRONG"); return 1; }
                   }
                 }
+              }
             puts("memset correct");
             return 0;
           }
