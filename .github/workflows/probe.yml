@@ -21,7 +21,9 @@ jobs:
           sw_vers -productVersion
       - name: Consumer source
         run: |
-          printf 'int printf(const char *, ...);\nvoid *memset(void *, int, unsigned long);\nint main(void) { char b[64]; memset(b, 0xAB, 64); printf("%d\\n", b[0] == (char)0xAB); return 0; }\n' > "$RUNNER_TEMP/consumer.c"
+          printf 'int printf(const char *, ...);\nvoid *memset(void *, int, unsigned long);\nint main(void) { volatile unsigned char b[64]; int ok = 1; memset((void *)b, 0xAB, 64); for (int i = 0; i < 64; i++) if (b[i] != 0xAB) ok = 0; printf("memset ok: %d\\n", ok); return !ok; }\n' > "$RUNNER_TEMP/consumer.c"
+          clang -fno-builtin "$RUNNER_TEMP/consumer.c" -o "$RUNNER_TEMP/consumer-control"
+          echo "control (no Ghostty library):"; "$RUNNER_TEMP/consumer-control"
           cat "$RUNNER_TEMP/consumer.c"
       - name: Build and inspect, script as shipped
         run: |
@@ -32,8 +34,9 @@ jobs:
           echo "--- global libc symbols defined by any member"
           nm -gUA "$A" | grep -E " T _(memset|memcpy|memmove|memcmp|bcmp|strlen)$" || echo "none"
           clang -fno-builtin "$RUNNER_TEMP/consumer.c" -Wl,-force_load,"$A" -o "$RUNNER_TEMP/consumer-asis"
-          echo "--- memset binding in the consumer"
-          nm -m "$RUNNER_TEMP/consumer-asis" | grep -E "_memset$" || true
+          echo "--- consumer, script as shipped"
+          nm -mu "$RUNNER_TEMP/consumer-asis" | grep -E "memset" || echo "no undefined memset: bound inside the binary"
+          "$RUNNER_TEMP/consumer-asis" || echo "exit $?"
       - name: Rebuild with the script localising every member
         run: |
           cd "$RUNNER_TEMP/ghostty"
@@ -63,6 +66,6 @@ jobs:
           echo "--- global libc symbols defined by any member"
           nm -gUA "$A" | grep -E " T _(memset|memcpy|memmove|memcmp|bcmp|strlen)$" || echo "none"
           clang -fno-builtin "$RUNNER_TEMP/consumer.c" -Wl,-force_load,"$A" -o "$RUNNER_TEMP/consumer-fixed"
-          echo "--- memset binding in the consumer"
-          nm -m "$RUNNER_TEMP/consumer-fixed" | grep -E "_memset$" || true
-          "$RUNNER_TEMP/consumer-fixed"
+          echo "--- consumer, every member localised"
+          nm -mu "$RUNNER_TEMP/consumer-fixed" | grep -E "memset" || echo "no undefined memset: bound inside the binary"
+          "$RUNNER_TEMP/consumer-fixed" || echo "exit $?"
