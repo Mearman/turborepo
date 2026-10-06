@@ -1,0 +1,23 @@
+name: probe
+on: push
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - run: sw_vers; xcrun --show-sdk-path; xcrun --show-sdk-version; grep -m1 '^targets' "$(xcrun --show-sdk-path)/usr/lib/libSystem.tbd"
+      - name: Zig 0.15.2 links libc
+        run: |
+          curl -fsSL https://ziglang.org/download/0.15.2/zig-aarch64-macos-0.15.2.tar.xz | tar -xJ
+          export PATH="$PWD/zig-aarch64-macos-0.15.2:$PATH"
+          mkdir t && cd t
+          printf 'const std = @import("std");\npub fn main() void { std.debug.print("hi\\n", .{}); }\n' > a.zig
+          printf 'const std = @import("std");\npub fn build(b: *std.Build) void {\n  const exe = b.addExecutable(.{ .name = "x", .root_module = b.createModule(.{ .root_source_file = b.path("a.zig"), .target = b.standardTargetOptions(.{}), .optimize = .Debug, .link_libc = true }) });\n  b.installArtifact(exe);\n}\n' > build.zig
+          zig build && echo ZIG_BUILD_OK
+      - name: Pinned nightly links a build script
+        run: |
+          rustup toolchain install nightly-2026-07-03 --profile minimal
+          cargo +nightly-2026-07-03 new --quiet p && cd p && printf 'fn main(){}\n' > build.rs && cargo +nightly-2026-07-03 build && echo RUST_BUILD_OK
